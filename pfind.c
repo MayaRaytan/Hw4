@@ -3,7 +3,6 @@
 #include <threads.h>
 #include <limits.h>
 
-
 typedef struct directory {
     char name[PATH_MAX];
     struct directory* next;
@@ -16,13 +15,23 @@ typedef struct queue{
     directory *tail;
 }queue;
 
+static int num_of_created_threads;
+char *T;
+queue* q;
+int num_of_threads;
+
+
 
 int perror_exit_1();
 directory* dequeue(queue q);
 void enqueue(queue* q, directory* d);
 
 
-directory* dequeue(queue q){
+directory* dequeue(){
+    /* queue is empty */
+    if (q->len == 0){
+        return NULL;
+    }
     directory *keep_head;
     keep_head = q->head;
     q->head = ((directory*)q->head)->next;
@@ -31,7 +40,12 @@ directory* dequeue(queue q){
 }
 
 void enqueue(queue* q, directory* d){
-    ((directory*)q->tail)->next = d;
+    if (q->len == 0){
+        q->head = d;
+    }
+    else {
+        ((directory *) q->tail)->next = d;
+    }
     q->tail = d;
     q->len++;
 }
@@ -41,11 +55,26 @@ int perror_exit_1(){
     exit(1);
 }
 
+void create_head_directory(char* dir_name){
+    d = (directory*) malloc(sizeof(directory));
+    if (d == NULL){
+        perror_exit_1();
+    }
+    d->name = (d->name, dir_name);
+    enqueue(q,d);
+}
+
+int search(){
+    while (num_of_created_threads != num_of_threads){}
+    /* all threads created, main signals to start searching */
+
+}
+
+
+
 int main(int argc, char *argv[]){
     char *root_directory;
-    char *T;
-    int num_of_threads, i, found_files;
-    queue* q;
+    int i, found_files;
     directory* d;
 
     if (argc == 4){
@@ -65,21 +94,20 @@ int main(int argc, char *argv[]){
             perror_exit_1();
         }
         /* add root directory to queue */
-        d = (directory*) malloc(sizeof(directory));
-        d->name = (d->name, root_directory);
-        enqueue(q,d);
+        create_head_directory(root_directory);
 
+        /* create searching threads */
         for (i = 0; i < num_of_threads; i++){
             thrd_t thread_id;
-            int rc = thrd_create(&thread_id, thread_func, (void *)"hello");
+            int rc = thrd_create(&thread_id, search, (void *)"hello");
             if (rc != thrd_success) {
+                perror_exit_1();
             }
+            num_of_created_threads++;
         }
-    }
-
-
 
     }
+
 
     /* wrong number of arguments*/
     else{
