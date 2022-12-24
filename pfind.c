@@ -2,6 +2,9 @@
 #include <string.h>
 #include <threads.h>
 #include <limits.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 typedef struct directory {
     char name[PATH_MAX];
@@ -19,12 +22,13 @@ static int num_of_created_threads;
 char *T;
 queue* q;
 int num_of_threads;
+mtx_t lock;
 
 
 
 int perror_exit_1();
-directory* dequeue(queue q);
-void enqueue(queue* q, directory* d);
+directory* dequeue();
+void enqueue(directory* d);
 
 
 directory* dequeue(){
@@ -39,7 +43,7 @@ directory* dequeue(){
     return keep_head;
 }
 
-void enqueue(queue* q, directory* d){
+void enqueue(directory* d){
     if (q->len == 0){
         q->head = d;
     }
@@ -55,18 +59,98 @@ int perror_exit_1(){
     exit(1);
 }
 
-void create_head_directory(char* dir_name){
+void create_tail_directory(char* dir_name){
     d = (directory*) malloc(sizeof(directory));
     if (d == NULL){
         perror_exit_1();
     }
     d->name = (d->name, dir_name);
-    enqueue(q,d);
+    enqueue(d);
+}
+
+int is_directory(const char *path) {
+    struct stat buff;
+    if (stat(path, &buff) != 0)
+        return 0;
+    return S_ISDIR(buff.st_mode);
+}
+
+int has_execute_read_permissions(char *dir_name){
+    int res;
+    res = access(dir_name, R_OK);
+    if (res != -1){
+        printf("Directory %s: Permission denied. \n", dir_name);
+        return 0;
+    }
+    res = access(dir_name, X_OK);
+    if (res != -1){
+        printf("Directory %s: Permission denied. \n", dir_name);
+        return 0;
+    }
+    return 1;
+}
+
+int iterate_over_directory(directory* d){
+    DIR *dirp;
+    struct dirent *dp;
+
+    if ((dirp = opendir(d)) == NULL) {
+
+        perror_exit_1();
+    }
+
+    do {
+        if ((dp = readdir(dirp)) != NULL) {
+            /* pointers to itself / to parent */
+            if ((strcmp(dp->d_name, '.') == 0) or (strcmp(dp->d_name, '..') == 0)){
+                continue;
+            }
+
+            /* a directory that can be searched */
+            if (is_directory(dp)){
+                if (has_execute_read_permissions(dp->d_name)){
+                    create_tail_directory(dp->d_name);
+                }
+            }
+
+            /* a file */
+            else{
+
+            }
+
+
+
+        }
+    } while (dp != NULL);
+
+    closedir(dirp);
 }
 
 int search(){
+    directory *d;
+
+
     while (num_of_created_threads != num_of_threads){}
     /* all threads created, main signals to start searching */
+
+    /* critical part */
+    rc = mtx_lock(&lock);
+    if (rc != thrd_success) {
+        perror_exit_1();
+    }
+
+    while (q->len == 0){
+        /* go out????????????????????? */
+    }
+
+    d = dequeue();
+
+    iterate_over_directory(d);
+
+    rc = mtx_unlock(&lock);
+    if (rc != thrd_success) {
+
+    }
 
 }
 
@@ -94,7 +178,16 @@ int main(int argc, char *argv[]){
             perror_exit_1();
         }
         /* add root directory to queue */
-        create_head_directory(root_directory);
+        create_tail_directory(root_directory);
+
+        /* from recitation */
+        // --- Initialize mutex ---------------------------
+        rc = mtx_init(&lock, mtx_plain);
+        if (rc != thrd_success) {
+            printf("ERROR in mtx_init()\n");
+            exit(-1);
+        }
+
 
         /* create searching threads */
         for (i = 0; i < num_of_threads; i++){
@@ -105,7 +198,7 @@ int main(int argc, char *argv[]){
             }
             num_of_created_threads++;
         }
-
+        mtx_destroy(&lock);
     }
 
 
