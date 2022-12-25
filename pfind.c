@@ -24,12 +24,13 @@ typedef struct queue{
 
 static int num_of_created_threads;
 char *T;
-queue* q;
+static queue* q;
 int num_of_threads;
 mtx_t lock;
-int found_files;
-cnd_t cond;
-cnt_d not_empty;
+static int found_files;
+cnd_t threads_created;
+cnt_t not_empty;
+
 
 int perror_exit_1();
 int perror_found_files();
@@ -49,6 +50,7 @@ directory* dequeue(){
     return keep_head;
 }
 
+
 void enqueue(directory* d){
     if (q->len == 0){
         q->head = d;
@@ -60,14 +62,17 @@ void enqueue(directory* d){
     q->len++;
 }
 
+
 int perror_exit_1(){
     perror("");
     exit(1);
 }
 
+
 int perror_found_files(){
     printf("Done searching, found %d files\n", found_files);
 }
+
 
 void create_tail_directory(char* dir_name){
     d = (directory*) malloc(sizeof(directory));
@@ -86,20 +91,22 @@ int is_directory(char *path) {
     return 0;
 }
 
-int has_execute_read_permissions(char *dir_name){
+
+int has_execute_read_permissions(char *path_name){
     int res;
-    res = access(dir_name, R_OK);
+    res = access(path_name, R_OK);
     if (res != -1){
-        printf("Directory %s: Permission denied. \n", dir_name);
+        printf("Directory %s: Permission denied. \n", path_name);
         return 0;
     }
-    res = access(dir_name, X_OK);
+    res = access(path_name, X_OK);
     if (res != -1){
-        printf("Directory %s: Permission denied. \n", dir_name);
+        printf("Directory %s: Permission denied. \n", path_name);
         return 0;
     }
     return 1;
 }
+
 
 int iterate_over_directory(directory* d){
     DIR *dirp;
@@ -118,14 +125,13 @@ int iterate_over_directory(directory* d){
                 continue;
             }
 
+            /* get new full path */
+            path = strcat(d->name, dp->d_name);
+
             /* a directory that can be searched */
-            if ((path = realpath(dp, NULL)) == NULL){
-                perror_found_files();
-                continue;
-            }
             if (is_directory(path)){
-                if (has_execute_read_permissions(dp->d_name)){
-                    create_tail_directory(dp->d_name);
+                if (has_execute_read_permissions(path)){
+                    create_tail_directory(path);
                     cnd_signal(&not_empty);
                 }
             }
@@ -143,6 +149,7 @@ int iterate_over_directory(directory* d){
     closedir(dirp);
 }
 
+
 int search(){
     directory *d;
 
@@ -152,18 +159,16 @@ int search(){
     }
 
     while (num_of_created_threads != num_of_threads){
-        cnd_wait(&cond, &lock);
+        cnd_wait(&threads_created, &lock);
     }
     /* all threads created, main signals to start searching */
 
-
     while (q->len == 0){
-        /* go out????????????????????? */
+        cnd_wait(&not_empty, &lock);
     }
 
+    /* critical part */
     d = dequeue();
-    iterate_over_directory(d);
-    free(d);
 
     rc = mtx_unlock(&lock);
     if (rc != thrd_success) {
@@ -171,14 +176,17 @@ int search(){
         perror("");
     }
 
-}
+    iterate_over_directory(d);
+    free(d);
 
+}
 
 
 int main(int argc, char *argv[]){
     char *root_directory;
     int i, found_files;
     directory* d;
+    thrd_t thread_ids;
 
     if (argc == 4){
         root_directory = argv[1];
@@ -190,6 +198,7 @@ int main(int argc, char *argv[]){
         if (q == NULL) {
             perror_exit_1();
         }
+
         /* add root directory to queue */
         create_tail_directory(root_directory);
 
@@ -197,17 +206,17 @@ int main(int argc, char *argv[]){
         // --- Initialize mutex ---------------------------
         rc = mtx_init(&lock, mtx_plain);
         if (rc != thrd_success) {
-            printf("ERROR in mtx_init()\n");
-            exit(-1);
+            perror_exit_1();
         }
 
+        /* Initialize condition */
         rc = cnd_init(&cond);
         /* if ????????????????????????*/
 
-        thrd_t thread_ids[THREAD_COUNT];
+        thread_ids[num_of_threads];
         /* create searching threads */
         for (i = 0; i < num_of_threads; i++){
-            int rc = thrd_create(&thread_ids[i], search, (void *)"hello");
+            int rc = thrd_create(&thread_ids[i], search, void);
             if (rc != thrd_success) {
                 perror_exit_1();
             }
