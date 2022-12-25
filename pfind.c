@@ -1,10 +1,13 @@
 #include <stdlib.h>
 #include <string.h>
+#include <string.h>
 #include <threads.h>
 #include <limits.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <stdio.h>
+
 
 typedef struct directory {
     char name[PATH_MAX];
@@ -18,15 +21,17 @@ typedef struct queue{
     directory *tail;
 }queue;
 
+
 static int num_of_created_threads;
 char *T;
 queue* q;
 int num_of_threads;
 mtx_t lock;
-
+int found_files;
 
 
 int perror_exit_1();
+int perror_found_files();
 directory* dequeue();
 void enqueue(directory* d);
 
@@ -59,6 +64,10 @@ int perror_exit_1(){
     exit(1);
 }
 
+int perror_found_files(){
+    printf("Done searching, found %d files\n", found_files);
+}
+
 void create_tail_directory(char* dir_name){
     d = (directory*) malloc(sizeof(directory));
     if (d == NULL){
@@ -68,11 +77,12 @@ void create_tail_directory(char* dir_name){
     enqueue(d);
 }
 
-int is_directory(const char *path) {
+int is_directory(char *path) {
     struct stat buff;
-    if (stat(path, &buff) != 0)
-        return 0;
-    return S_ISDIR(buff.st_mode);
+    if (stat(path, &buff) == 0) &&  S_ISDIR(buff.st_mode){
+        return 1
+    }
+    return 0;
 }
 
 int has_execute_read_permissions(char *dir_name){
@@ -93,10 +103,11 @@ int has_execute_read_permissions(char *dir_name){
 int iterate_over_directory(directory* d){
     DIR *dirp;
     struct dirent *dp;
+    char *path;
 
     if ((dirp = opendir(d)) == NULL) {
-
-        perror_exit_1();
+        perror_found_files();
+        return;
     }
 
     do {
@@ -107,7 +118,11 @@ int iterate_over_directory(directory* d){
             }
 
             /* a directory that can be searched */
-            if (is_directory(dp)){
+            if ((path = realpath(dp, NULL)) == NULL){
+                perror_found_files();
+                continue;
+            }
+            if (is_directory(path)){
                 if (has_execute_read_permissions(dp->d_name)){
                     create_tail_directory(dp->d_name);
                 }
@@ -115,11 +130,11 @@ int iterate_over_directory(directory* d){
 
             /* a file */
             else{
-
+                if (strstr(dp->d_name, T) == 0){
+                    found_files++;
+                    printf("%s\n", path);
+                }
             }
-
-
-
         }
     } while (dp != NULL);
 
@@ -129,14 +144,13 @@ int iterate_over_directory(directory* d){
 int search(){
     directory *d;
 
-
     while (num_of_created_threads != num_of_threads){}
     /* all threads created, main signals to start searching */
 
     /* critical part */
     rc = mtx_lock(&lock);
     if (rc != thrd_success) {
-        perror_exit_1();
+        perror("");
     }
 
     while (q->len == 0){
@@ -144,12 +158,13 @@ int search(){
     }
 
     d = dequeue();
-
     iterate_over_directory(d);
+    free(d);
 
     rc = mtx_unlock(&lock);
     if (rc != thrd_success) {
-
+        /* ??????????????????????????? */
+        perror("");
     }
 
 }
@@ -166,12 +181,6 @@ int main(int argc, char *argv[]){
         T = argv[2];
         num_of_threads = atoi(argv[3]);
 
-        found_files = 0;
-
-        /* validate that root directory can be searched */
-        /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
-        if (root_directory){}
-
         /* create directories queue */
         q = (queue*)malloc(sizeof(queue));
         if (q == NULL) {
@@ -187,8 +196,6 @@ int main(int argc, char *argv[]){
             printf("ERROR in mtx_init()\n");
             exit(-1);
         }
-
-
         /* create searching threads */
         for (i = 0; i < num_of_threads; i++){
             thrd_t thread_id;
@@ -199,8 +206,10 @@ int main(int argc, char *argv[]){
             num_of_created_threads++;
         }
         mtx_destroy(&lock);
+        free(q);
+        printf("Done searching, found %d files\n", found_files);
+        exit(0);
     }
-
 
     /* wrong number of arguments*/
     else{
