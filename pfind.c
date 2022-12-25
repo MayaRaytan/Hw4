@@ -28,7 +28,8 @@ queue* q;
 int num_of_threads;
 mtx_t lock;
 int found_files;
-
+cnd_t cond;
+cnt_d not_empty;
 
 int perror_exit_1();
 int perror_found_files();
@@ -125,6 +126,7 @@ int iterate_over_directory(directory* d){
             if (is_directory(path)){
                 if (has_execute_read_permissions(dp->d_name)){
                     create_tail_directory(dp->d_name);
+                    cnd_signal(&not_empty);
                 }
             }
 
@@ -144,14 +146,16 @@ int iterate_over_directory(directory* d){
 int search(){
     directory *d;
 
-    while (num_of_created_threads != num_of_threads){}
-    /* all threads created, main signals to start searching */
-
-    /* critical part */
     rc = mtx_lock(&lock);
     if (rc != thrd_success) {
         perror("");
     }
+
+    while (num_of_created_threads != num_of_threads){
+        cnd_wait(&cond, &lock);
+    }
+    /* all threads created, main signals to start searching */
+
 
     while (q->len == 0){
         /* go out????????????????????? */
@@ -196,16 +200,30 @@ int main(int argc, char *argv[]){
             printf("ERROR in mtx_init()\n");
             exit(-1);
         }
+
+        rc = cnd_init(&cond);
+        /* if ????????????????????????*/
+
+        thrd_t thread_ids[THREAD_COUNT];
         /* create searching threads */
         for (i = 0; i < num_of_threads; i++){
-            thrd_t thread_id;
-            int rc = thrd_create(&thread_id, search, (void *)"hello");
+            int rc = thrd_create(&thread_ids[i], search, (void *)"hello");
             if (rc != thrd_success) {
                 perror_exit_1();
             }
             num_of_created_threads++;
         }
+
+        /* wait till all threads finish */
+        for (i = 0; i < num_of_threads; i++){
+            rc = thrd_join(thread[i], &status);
+            if (rc != thrd_success) {
+                perror_exit_1();
+            }
+        }
+
         mtx_destroy(&lock);
+        cnd_destroy(&cond);
         free(q);
         printf("Done searching, found %d files\n", found_files);
         exit(0);
