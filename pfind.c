@@ -28,14 +28,14 @@ static queue* q;
 int num_of_threads;
 mtx_t lock;
 static int found_files;
-cnd_t threads_created;
+cnd_t all_threads_created;
 cnt_t not_empty;
 
 
 int perror_exit_1();
 int perror_found_files();
 directory* dequeue();
-void enqueue(directory* d);
+void enqueue(char* dir_name);
 
 
 directory* dequeue(){
@@ -51,7 +51,14 @@ directory* dequeue(){
 }
 
 
-void enqueue(directory* d){
+void enqueue(char* dir_name){
+    directory* d
+    d = (directory*) malloc(sizeof(directory));
+    if (d == NULL){
+        perror_exit_1();
+    }
+    d->name = (d->name, dir_name);
+
     if (q->len == 0){
         q->head = d;
     }
@@ -74,14 +81,7 @@ int perror_found_files(){
 }
 
 
-void create_tail_directory(char* dir_name){
-    d = (directory*) malloc(sizeof(directory));
-    if (d == NULL){
-        perror_exit_1();
-    }
-    d->name = (d->name, dir_name);
-    enqueue(d);
-}
+
 
 int is_directory(char *path) {
     struct stat buff;
@@ -118,8 +118,7 @@ int iterate_over_directory(directory* d){
         return;
     }
 
-    do {
-        if ((dp = readdir(dirp)) != NULL) {
+    while ((dp = readdir(dirp)) != NULL) {
             /* pointers to itself / to parent */
             if ((strcmp(dp->d_name, '.') == 0) or (strcmp(dp->d_name, '..') == 0)){
                 continue;
@@ -131,7 +130,7 @@ int iterate_over_directory(directory* d){
             /* a directory that can be searched */
             if (is_directory(path)){
                 if (has_execute_read_permissions(path)){
-                    create_tail_directory(path);
+                    enqueue(path);
                     cnd_signal(&not_empty);
                 }
             }
@@ -143,8 +142,7 @@ int iterate_over_directory(directory* d){
                     printf("%s\n", path);
                 }
             }
-        }
-    } while (dp != NULL);
+    }
 
     closedir(dirp);
 }
@@ -159,7 +157,7 @@ int search(){
     }
 
     while (num_of_created_threads != num_of_threads){
-        cnd_wait(&threads_created, &lock);
+        cnd_wait(&all_threads_created, &lock);
     }
     /* all threads created, main signals to start searching */
 
@@ -200,7 +198,7 @@ int main(int argc, char *argv[]){
         }
 
         /* add root directory to queue */
-        create_tail_directory(root_directory);
+        enqueue(root_directory);
 
         /* from recitation */
         // --- Initialize mutex ---------------------------
@@ -220,8 +218,9 @@ int main(int argc, char *argv[]){
             if (rc != thrd_success) {
                 perror_exit_1();
             }
-            num_of_created_threads++;
+//            num_of_created_threads++;
         }
+        cnd_signal(&all_threads_created);
 
         /* wait till all threads finish */
         for (i = 0; i < num_of_threads; i++){
