@@ -48,7 +48,7 @@ void enqueue(char* dir_name);
 int is_directory(char *path);
 int has_execute_read_permissions(char *path_name);
 void iterate_over_directory(directory* d);
-void search();
+int search(void* idx);
 
 
 directory* dequeue(){
@@ -163,7 +163,7 @@ void iterate_over_directory(directory* d){
 }
 
 
-void search(void* idx){
+int search(void* idx){
     directory *d;
     int sleep_time;
     sleep_time = *(int*)idx;
@@ -204,6 +204,7 @@ void search(void* idx){
         cnd_signal(&active_thread);
 
     }
+    return 1;
 }
 
 
@@ -240,7 +241,7 @@ int main(int argc, char *argv[]){
         thrd_t thread_ids[num_of_threads];
         /* create searching threads */
         for (i = 0; i < num_of_threads; i++){
-            rc = thrd_create(&thread_ids[i], NULL, search, (void *)i);
+            rc = thrd_create(&thread_ids[i], search, (void *)i);
             if (rc != thrd_success) {
                 perror_exit_1();
             }
@@ -249,7 +250,7 @@ int main(int argc, char *argv[]){
         cnd_signal(&all_threads_created);
 
         if (waiting_threads == num_of_threads){
-            exit();
+            exit(0);
         }
 //        /* wait till all threads finish */
 //        for (i = 0; i < num_of_threads; i++){
