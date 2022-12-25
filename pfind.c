@@ -29,13 +29,17 @@ int num_of_threads;
 mtx_t lock;
 static int found_files;
 cnd_t all_threads_created;
-cnt_t not_empty;
+cnd_t not_empty;
 
 
 int perror_exit_1();
-int perror_found_files();
+void perror_found_files();
 directory* dequeue();
 void enqueue(char* dir_name);
+int is_directory(char *path);
+int has_execute_read_permissions(char *path_name);
+void iterate_over_directory(directory* d);
+void search();
 
 
 directory* dequeue(){
@@ -52,12 +56,12 @@ directory* dequeue(){
 
 
 void enqueue(char* dir_name){
-    directory* d
+    directory* d;
     d = (directory*) malloc(sizeof(directory));
     if (d == NULL){
         perror_exit_1();
     }
-    d->name = (d->name, dir_name);
+    strcpy(d->name, dir_name);
 
     if (q->len == 0){
         q->head = d;
@@ -76,7 +80,7 @@ int perror_exit_1(){
 }
 
 
-int perror_found_files(){
+void perror_found_files(){
     printf("Done searching, found %d files\n", found_files);
 }
 
@@ -85,8 +89,8 @@ int perror_found_files(){
 
 int is_directory(char *path) {
     struct stat buff;
-    if (stat(path, &buff) == 0) &&  S_ISDIR(buff.st_mode){
-        return 1
+    if ((stat(path, &buff) == 0) && S_ISDIR(buff.st_mode)){
+        return 1;
     }
     return 0;
 }
@@ -108,19 +112,19 @@ int has_execute_read_permissions(char *path_name){
 }
 
 
-int iterate_over_directory(directory* d){
+void iterate_over_directory(directory* d){
     DIR *dirp;
     struct dirent *dp;
     char *path;
 
-    if ((dirp = opendir(d)) == NULL) {
+    if ((dirp = opendir(d->name)) == NULL) {
         perror_found_files();
         return;
     }
 
     while ((dp = readdir(dirp)) != NULL) {
             /* pointers to itself / to parent */
-            if ((strcmp(dp->d_name, '.') == 0) or (strcmp(dp->d_name, '..') == 0)){
+            if ((strcmp(dp->d_name, ".") == 0) || (strcmp(dp->d_name, "..") == 0)){
                 continue;
             }
 
@@ -148,8 +152,9 @@ int iterate_over_directory(directory* d){
 }
 
 
-int search(){
+void search(){
     directory *d;
+    int rc;
 
     rc = mtx_lock(&lock);
     if (rc != thrd_success) {
@@ -182,9 +187,7 @@ int search(){
 
 int main(int argc, char *argv[]){
     char *root_directory;
-    int i, found_files;
-    directory* d;
-    thrd_t thread_ids;
+    int i, found_files, rc;
 
     if (argc == 4){
         root_directory = argv[1];
@@ -208,13 +211,15 @@ int main(int argc, char *argv[]){
         }
 
         /* Initialize condition */
-        rc = cnd_init(&cond);
+        rc = cnd_init(&all_threads_created);
+
+        rc = cnd_init(&not_empty);
         /* if ????????????????????????*/
 
-        thread_ids[num_of_threads];
+        thrd_t thread_ids[num_of_threads];
         /* create searching threads */
         for (i = 0; i < num_of_threads; i++){
-            int rc = thrd_create(&thread_ids[i], search, void);
+            rc = thrd_create(&thread_ids[i], search, (void *));
             if (rc != thrd_success) {
                 perror_exit_1();
             }
@@ -224,14 +229,15 @@ int main(int argc, char *argv[]){
 
         /* wait till all threads finish */
         for (i = 0; i < num_of_threads; i++){
-            rc = thrd_join(thread[i], &status);
+            rc = thrd_join(thread_ids[i], NULL);
             if (rc != thrd_success) {
                 perror_exit_1();
             }
         }
 
         mtx_destroy(&lock);
-        cnd_destroy(&cond);
+        cnd_destroy(&all_threads_created);
+        cnd_destroy(&not_empty);
         free(q);
         printf("Done searching, found %d files\n", found_files);
         exit(0);
