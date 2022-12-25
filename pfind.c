@@ -28,6 +28,8 @@ char *T;
 static queue* q;
 int num_of_threads;
 mtx_t lock;
+mtx_t lock_found_files;
+mtx_t lock_waiting_threads;
 static int found_files;
 cnd_t all_threads_created;
 cnd_t not_empty;
@@ -36,6 +38,7 @@ cnd_t active_thread;
 int curr_id = 0;
 /* maximum id of sleeping thread */
 int max_id = 0;
+int waiting_threads = 0;
 
 
 int perror_exit_1();
@@ -148,7 +151,9 @@ void iterate_over_directory(directory* d){
             /* It's a file */
             else{
                 if (strstr(dp->d_name, T) == 0){
+                    mtx_lock(&lock_found_files);
                     found_files++;
+                    mtx_unlock(&lock_found_files);
                     printf("%s\n", path);
                 }
             }
@@ -167,7 +172,9 @@ void search(void* idx){
         mtx_lock(&lock);
 
         while (num_of_created_threads != num_of_threads) {
+            waiting_threads++;
             cnd_wait(&all_threads_created, &lock);
+            waiting_threads--;
         }
         /* all threads created, main signals to start searching */
 
@@ -175,22 +182,27 @@ void search(void* idx){
             sleep_time = max_id % num_of_threads;
             max_id++;
             max_id = max_id % num_of_threads;
+            waiting_threads++;
             cnd_wait(&not_empty, &lock);
+            waiting_threads--;
+            curr_id++;
+            curr_id = curr_id % num_of_threads;
         }
 
         while (sleep_time != curr_id){
+            waiting_threads++;
             cnd_wait(&active_thread, &lock);
+            waiting_threads--;
         }
 
         /* critical part */
         d = dequeue();
-
-        iterate_over_directory(d);
         mtx_unlock(&lock);
 
-        curr_id++;
-        curr_id = curr_id % num_of_threads;
+        iterate_over_directory(d);
+
         cnd_signal(&active_thread);
+
     }
 }
 
@@ -236,13 +248,16 @@ int main(int argc, char *argv[]){
         }
         cnd_signal(&all_threads_created);
 
-        /* wait till all threads finish */
-        for (i = 0; i < num_of_threads; i++){
-            rc = thrd_join(thread_ids[i], NULL);
-            if (rc != thrd_success) {
-                perror_exit_1();
-            }
+        if (waiting_threads == num_of_threads){
+            exit();
         }
+//        /* wait till all threads finish */
+//        for (i = 0; i < num_of_threads; i++){
+//            rc = thrd_join(thread_ids[i], NULL);
+//            if (rc != thrd_success) {
+//                perror_exit_1();
+//            }
+//        }
 
         mtx_destroy(&lock);
         cnd_destroy(&all_threads_created);
