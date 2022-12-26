@@ -210,7 +210,8 @@ int search(void* idx){
 
 int main(int argc, char *argv[]){
     char *root_directory;
-    int i, found_files, rc;
+    int found_files, rc;
+    size_t i;
 
     if (argc == 4){
         root_directory = argv[1];
