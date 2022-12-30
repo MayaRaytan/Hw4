@@ -202,6 +202,17 @@ void iterate_over_directory(directory* d){
     closedir(dirp);
 }
 
+void signal_all_threads(){
+    cv_node *cv;
+    while (q_cv->len > 0){
+        cv = dequeue_cv();
+        cnd_signal(&cv->my_cnd);
+        cnd_destroy(&cv->my_cnd);
+        free(cv);
+    }
+    free(q_cv);
+}
+
 
 int search(void* node){
     directory *d;
@@ -212,10 +223,19 @@ int search(void* node){
         mtx_lock(&lock);
 
         while (q_dir->len == 0 || num_of_created_threads != num_of_threads) {
+            if (q_cv->len == num_of_threads - 1){
+                /* I'm the last awake thread and there are no directories to search */
+                signal_all_threads();
+                thrd_exit(0);
+            }
             mtx_lock(&lock_cv);
             enqueue_cv(cv);
             mtx_unlock(&lock_cv);
             cnd_wait(&cv->my_cnd, &lock);
+
+            if (q_dir->len == 0){
+                thrd_exit(0);
+            }
         }
 
         /* critical part */
@@ -227,16 +247,6 @@ int search(void* node){
     return 1;
 }
 
-
-void free_q_cv(){
-    cv_node *cv;
-    while (q_cv->len > 0){
-        cv = dequeue_cv();
-        cnd_destroy(&cv->my_cnd);
-        free(cv);
-    }
-    free(q_cv);
-}
 
 int main(int argc, char *argv[]){
     char *root_directory;
@@ -285,23 +295,20 @@ int main(int argc, char *argv[]){
         }
         num_of_created_threads = num_of_threads;
 
-        /* all threads created, main signals to start searching */
-        /* wake up the first thread that is waiting */
-
-        if (q_cv->len == num_of_threads && q_dir->len == 0){
-            exit(0);
+        /* wait till all threads finish */
+        for (i = 0; i < num_of_threads; i++) {
+            rc = thrd_join(thread_ids[i], NULL);
+            if (rc != thrd_success) {
+                perror_exit_1();
+            }
         }
-
-//        /* wait till all threads finish */
-//        for (i = 0; i < num_of_threads; i++){
-//            rc = thrd_join(thread_ids[i], NULL);
-//            if (rc != thrd_success) {perror_exit_1();}
-
         mtx_destroy(&lock);
-        cnd_destroy(&not_empty);
+        mtx_destroy(&lock_cv);
+        mtx_destroy(&lock_found_files);
         free(q_dir);
         printf("Done searching, found %d files\n", found_files);
-        thrd_exit(0);
+        /* 0 if all threads didn't get errors, otherwise 1*/
+        exit(errors);
     }
 
     /* wrong number of arguments*/
