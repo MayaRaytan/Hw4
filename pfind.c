@@ -9,62 +9,82 @@
 #include <stdio.h>
 #define True 1
 
-typedef struct directory {
+typedef struct directory{
     char name[PATH_MAX];
     struct directory* next;
 }directory;
 
-typedef struct queue{
+typedef struct queue_dir{
     /* number of items in queue*/
     int len;
     directory *head;
     directory *tail;
-}queue;
+}queue_dir;
+
+typedef struct cv_node{
+    cnd_t my_cnd;
+    struct cv_node* next;
+}cv_node;
+
+typedef struct queue_cv{
+    /* number of items in queue*/
+    int len;
+    cv_node *head;
+    cv_node *tail;
+}queue_cv;
 
 
 
-static int num_of_created_threads;
+
+int num_of_created_threads = 0;
 char *T;
-static queue* q;
+static queue_dir* q_dir;
+static queue_cv* q_cv;
 int num_of_threads;
 mtx_t lock;
+mtx_t lock_cv;
 mtx_t lock_found_files;
-mtx_t lock_waiting_threads;
 static int found_files;
 cnd_t all_threads_created;
-cnd_t not_empty;
-cnd_t active_thread;
-/* currently working thread */
-int curr_id = 0;
-/* maximum id of sleeping thread */
-int max_id = 0;
-int waiting_threads = 0;
+int errors = 0;
 
 
 int perror_exit_1();
-void perror_found_files();
-directory* dequeue();
-void enqueue(char* dir_name);
+directory* dequeue_dir()
+void enqueue_dir(char* dir_name);
 int is_directory(char *path);
 int has_execute_read_permissions(char *path_name);
 void iterate_over_directory(directory* d);
 int search(void* idx);
+void free_q_cv();
 
 
-directory* dequeue(){
+directory* dequeue_dir(){
+    directory *keep_head;
     /* queue is empty */
-    if (q->len == 0){
+    if (q_dir->len == 0){
         return NULL;
     }
-    directory *keep_head;
-    keep_head = q->head;
-    q->head = ((directory*)q->head)->next;
-    q->len--;
+    keep_head = q_dir->head;
+    q_dir->head = ((directory*)q_dir->head)->next;
+    q_dir->len--;
+    return keep_head;
+}
+
+cv_node* dequeue_cv(){
+    cv_node *keep_head;
+    /* queue is empty */
+    if (q_cv->len == 0){
+        return NULL;
+    }
+    keep_head = q_cv->head;
+    q_cv->head = ((cv_node*)q_cv->head)->next;
+    q_cv->len--;
     return keep_head;
 }
 
 
-void enqueue(char* dir_name){
+void enqueue_dir(char* dir_name){
     directory* d;
     d = (directory*) malloc(sizeof(directory));
     if (d == NULL){
@@ -72,15 +92,27 @@ void enqueue(char* dir_name){
     }
     strcpy(d->name, dir_name);
 
-    if (q->len == 0){
-        q->head = d;
-        q->len = 1;
+    if (q_dir->len == 0){
+        q_dir->head = d;
+        q_dir->len = 1;
     }
     else {
-        ((directory *) q->tail)->next = d;
-        q->len++;
+        ((directory *) q_dir->tail)->next = d;
+        q_dir->len++;
     }
-    q->tail = d;
+    q_dir->tail = d;
+}
+
+void enqueue_cv(cv_node* cv){
+    if (q_cv->len == 0){
+        q_cv->head = d;
+        q_cv->len = 1;
+    }
+    else {
+        ((cv_node*) q_cv->tail)->next = node;
+        q_cv->len++;
+    }
+    q_cv->tail = d;
 }
 
 
@@ -90,16 +122,14 @@ int perror_exit_1(){
 }
 
 
-void perror_found_files(){
-    printf("Done searching, found %d files\n", found_files);
-}
-
-
-
 
 int is_directory(char *path) {
     struct stat buff;
-    if ((stat(path, &buff) == 0) && S_ISDIR(buff.st_mode)){
+    if (stat(path, &buff) == -1){
+        perror("");
+        errors = 1;
+    }
+    if (S_ISDIR(buff.st_mode)){
         return 1;
     }
     return 0;
@@ -120,12 +150,14 @@ void iterate_over_directory(directory* d){
     struct dirent *dp;
     char *path;
     char *dname;
+    cnd_t *cv;
 
     dname = d->name;
     free(d);
 
     if ((dirp = opendir(dname)) == NULL) {
-        perror_found_files();
+        perror("");
+        errors = 1;
         return;
     }
 
@@ -142,15 +174,23 @@ void iterate_over_directory(directory* d){
             if (is_directory(path)){
                 if (has_execute_read_permissions(path)){
                     mtx_lock(&lock);
-                    enqueue(path);
+                    enqueue_dir(path);
                     mtx_unlock(&lock);
-                    cnd_signal(&not_empty);
+
+                    mtx_lock(&lock_cv);
+                    cv = dequeue_cv();
+                    /* if there are sleeping threads */
+                    if (cv != NULL){
+                        cnd_signal(&cv->my_cnd);
+                    }
+                    mtx_unlock(&lock_cv);
+
                 }
             }
 
             /* It's a file */
             else{
-                if (strstr(dp->d_name, T) == 0){
+                if (strstr(dp->d_name, T) != NULL){
                     mtx_lock(&lock_found_files);
                     found_files++;
                     mtx_unlock(&lock_found_files);
@@ -163,55 +203,46 @@ void iterate_over_directory(directory* d){
 }
 
 
-int search(void* idx){
+int search(void* node){
     directory *d;
-    int sleep_time;
-    sleep_time = *(int*)idx;
+    cv_node *cv;
+    cv = (cv_node *)node;
 
     while (True) {
         mtx_lock(&lock);
 
-        while (num_of_created_threads != num_of_threads) {
-            waiting_threads++;
-            cnd_wait(&all_threads_created, &lock);
-            waiting_threads--;
-        }
-        /* all threads created, main signals to start searching */
-
-        while (q->len == 0) {
-            sleep_time = max_id % num_of_threads;
-            max_id++;
-            max_id = max_id % num_of_threads;
-            waiting_threads++;
-            cnd_wait(&not_empty, &lock);
-            waiting_threads--;
-            curr_id++;
-            curr_id = curr_id % num_of_threads;
-        }
-
-        while (sleep_time != curr_id){
-            waiting_threads++;
-            cnd_wait(&active_thread, &lock);
-            waiting_threads--;
+        while (q_dir->len == 0 || num_of_created_threads != num_of_threads) {
+            mtx_lock(&lock_cv);
+            enqueue_cv(cv);
+            mtx_unlock(&lock_cv);
+            cnd_wait(&cv->my_cnd, &lock);
         }
 
         /* critical part */
-        d = dequeue();
+        d = dequeue_dir();
         mtx_unlock(&lock);
 
         iterate_over_directory(d);
-
-        cnd_signal(&active_thread);
-
     }
     return 1;
 }
 
 
+void free_q_cv(){
+    cv_node *cv;
+    while (q_cv->len > 0){
+        cv = dequeue_cv();
+        cnd_destroy(&cv->my_cnd);
+        free(cv);
+    }
+    free(q_cv);
+}
+
 int main(int argc, char *argv[]){
     char *root_directory;
     int found_files, rc;
     size_t i;
+    cv_node *cv;
 
     if (argc == 4){
         root_directory = argv[1];
@@ -223,48 +254,52 @@ int main(int argc, char *argv[]){
         }
 
         /* create directories queue */
-        q = (queue*)malloc(sizeof(queue));
-        if (q == NULL) {
+        q_dir = (queue_dir *) malloc(sizeof(queue_dir));
+        if (q_dir == NULL) {
             perror_exit_1();
         }
 
         /* add root directory to queue */
-        enqueue(root_directory);
+        enqueue_dir(root_directory);
 
         /* initialize mutex */
         mtx_init(&lock, mtx_plain);
+        mtx_init(&lock_cv, mtx_plain);
 
-        /* initialize condition */
-        cnd_init(&all_threads_created);
-        cnd_init(&not_empty);
-        cnd_init(&active_thread);
-
+        q_cv = (queue_cv *) malloc(sizeof(queue_cv));
+        if (q_dir == NULL) {
+            perror_exit_1();
+        }
         thrd_t thread_ids[num_of_threads];
         /* create searching threads */
         for (i = 0; i < num_of_threads; i++){
-            rc = thrd_create(&thread_ids[i], search, (void *)i);
+            cv = (cv_node *) malloc(sizeof(cv_node));
+            if (cv == NULL){
+                perror_exit_1();
+            }
+            rc = thrd_create(&thread_ids[i], search, (void *)cv);
             if (rc != thrd_success) {
                 perror_exit_1();
             }
-            num_of_created_threads++;
+            cnd_init(&cv->my_cnd);
         }
-        cnd_signal(&all_threads_created);
+        num_of_created_threads = num_of_threads;
 
-        if (waiting_threads == num_of_threads){
+        /* all threads created, main signals to start searching */
+        /* wake up the first thread that is waiting */
+
+        if (q_cv->len == num_of_threads && q_dir->len == 0){
             exit(0);
         }
+
 //        /* wait till all threads finish */
 //        for (i = 0; i < num_of_threads; i++){
 //            rc = thrd_join(thread_ids[i], NULL);
-//            if (rc != thrd_success) {
-//                perror_exit_1();
-//            }
-//        }
+//            if (rc != thrd_success) {perror_exit_1();}
 
         mtx_destroy(&lock);
-        cnd_destroy(&all_threads_created);
         cnd_destroy(&not_empty);
-        free(q);
+        free(q_dir);
         printf("Done searching, found %d files\n", found_files);
         thrd_exit(0);
     }
