@@ -1,6 +1,5 @@
 #include <stdlib.h>
 #include <string.h>
-#include <string.h>
 #include <threads.h>
 #include <limits.h>
 #include <dirent.h>
@@ -50,13 +49,17 @@ int errors = 0;
 
 
 int perror_exit_1();
-directory* dequeue_dir()
+directory* dequeue_dir();
+cv_node* dequeue_cv();
 void enqueue_dir(char* dir_name);
+void enqueue_cv(cv_node* cv);
 int is_directory(char *path);
 int has_execute_read_permissions(char *path_name);
 void iterate_over_directory(directory* d);
+void signal_all_threads();
 int search(void* idx);
-void free_q_cv();
+
+
 
 
 directory* dequeue_dir(){
@@ -105,14 +108,14 @@ void enqueue_dir(char* dir_name){
 
 void enqueue_cv(cv_node* cv){
     if (q_cv->len == 0){
-        q_cv->head = d;
+        q_cv->head = cv;
         q_cv->len = 1;
     }
     else {
-        ((cv_node*) q_cv->tail)->next = node;
+        ((cv_node*) q_cv->tail)->next = cv;
         q_cv->len++;
     }
-    q_cv->tail = d;
+    q_cv->tail = cv;
 }
 
 
@@ -150,7 +153,9 @@ void iterate_over_directory(directory* d){
     struct dirent *dp;
     char *path;
     char *dname;
-    cnd_t *cv;
+    cv_node *cv;
+
+    printf("here");
 
     dname = d->name;
     free(d);
@@ -219,6 +224,8 @@ int search(void* node){
     cv_node *cv;
     cv = (cv_node *)node;
 
+    printf("in thread");
+
     while (True) {
         mtx_lock(&lock);
 
@@ -253,6 +260,8 @@ int main(int argc, char *argv[]){
     int found_files, rc;
     size_t i;
     cv_node *cv;
+
+    printf("in main");
 
     if (argc == 4){
         root_directory = argv[1];
@@ -313,6 +322,7 @@ int main(int argc, char *argv[]){
 
     /* wrong number of arguments*/
     else{
+        printf("hereeeee");
         perror_exit_1();
     }
 }
