@@ -22,7 +22,6 @@ typedef struct queue_dir{
 
 typedef struct cv_node{
     cnd_t my_cnd;
-    int check;
     struct cv_node* next;
 }cv_node;
 
@@ -45,7 +44,7 @@ mtx_t lock;
 mtx_t lock_cv;
 mtx_t lock_found_files;
 int found_files = 0;
-cnd_t all_threads_created;
+cnd_t exit;
 int errors = 0;
 
 
@@ -154,8 +153,7 @@ int has_execute_read_permissions(char *path_name){
 void iterate_over_directory(directory* d){
     DIR *dirp;
     struct dirent *dp;
-//    char path[PATH_MAX];
-    char *path;
+    char path[PATH_MAX];
     char dname[PATH_MAX];
     cv_node *cv;
 
@@ -175,8 +173,9 @@ void iterate_over_directory(directory* d){
             }
 
             /* get new full path */
-            path = strcat(dname, "/");
-            path = strcat(path, dp->d_name);
+            strcpy(path, dname);
+            strcat(path, "/");
+            strcat(path, dp->d_name);
 
 
             /* a directory that can be searched */
@@ -244,31 +243,28 @@ int search(void* node){
     directory *d;
     cv_node *cv;
     cv = (cv_node *)node;
-    printf("here");
     cnd_init(&cv->my_cnd);
 
     while (True) {
         mtx_lock(&lock);
-
         while (q_dir->len == 0 || num_of_created_threads != num_of_threads) {
             mtx_lock(&lock_cv);
+
+            /* I'm the last awake thread and there are no directories to search */
             if (q_cv->len == num_of_threads - 1){
-                /* I'm the last awake thread and there are no directories to search */
                 signal_all_threads();
-                thrd_exit(0);
+                cnd_signal(&exit);
+
             }
+
             enqueue_cv(cv);
             mtx_unlock(&lock_cv);
             cnd_wait(&cv->my_cnd, &lock);
-
-            if (q_dir->len == 0){
-                thrd_exit(0);
-            }
+            /* thread woke up by signal_all_threads just to exit */
+            if (q_dir->len == 0){thrd_exit(0);}
         }
-
         d = dequeue_dir();
         mtx_unlock(&lock);
-
         iterate_over_directory(d);
     }
     return 1;
@@ -317,17 +313,12 @@ int main(int argc, char *argv[]){
         }
         num_of_created_threads = num_of_threads;
 
-        /* wait till all threads finish */
-        for (i = 0; i < num_of_threads; i++) {
-            rc = thrd_join(thread_ids[i], NULL);
-            if (rc != thrd_success) {
-                perror_exit_1();
-            }
-        }
+        cnd_wait(&exit, &lock);
+
+        free(q_dir);
         mtx_destroy(&lock);
         mtx_destroy(&lock_cv);
         mtx_destroy(&lock_found_files);
-        free(q_dir);
         printf("Done searching, found %d files\n", found_files);
 
         /* 0 if all threads didn't get errors, otherwise 1*/
