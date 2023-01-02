@@ -44,7 +44,7 @@ mtx_t lock;
 mtx_t lock_cv;
 mtx_t lock_found_files;
 int found_files = 0;
-cnd_t exit;
+cnd_t exit_sign;
 int errors = 0;
 
 
@@ -245,6 +245,7 @@ int search(void* node){
     cv = (cv_node *)node;
     cnd_init(&cv->my_cnd);
 
+
     while (True) {
         mtx_lock(&lock);
         while (q_dir->len == 0 || num_of_created_threads != num_of_threads) {
@@ -253,8 +254,7 @@ int search(void* node){
             /* I'm the last awake thread and there are no directories to search */
             if (q_cv->len == num_of_threads - 1){
                 signal_all_threads();
-                cnd_signal(&exit);
-
+                cnd_signal(&exit_sign);
             }
 
             enqueue_cv(cv);
@@ -281,6 +281,8 @@ int main(int argc, char *argv[]){
         root_directory = argv[1];
         T = argv[2];
         num_of_threads = atoi(argv[3]);
+
+        printf("%d", num_of_threads);
 
         if (!is_directory(root_directory) || !has_execute_read_permissions(root_directory)){
             perror_exit_1();
@@ -310,10 +312,13 @@ int main(int argc, char *argv[]){
             if (rc != thrd_success) {
                 perror_exit_1();
             }
+            printf("%d", i);
         }
+        printf("finished creating threads");
         num_of_created_threads = num_of_threads;
 
-        cnd_wait(&exit, &lock);
+        cnd_init(&exit_sign);
+        cnd_wait(&exit_sign, &lock);
 
         free(q_dir);
         mtx_destroy(&lock);
